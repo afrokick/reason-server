@@ -2,7 +2,6 @@
 header('Content-type: text/html; charset=utf-8');
 include("database.php");
 include("lib.php");
-$resp = new NetResponse;
 $method = $_GET["method"];
 
 //function Pr
@@ -12,6 +11,8 @@ switch ($method){
         $auth_type = $_GET["auth_type"];
         switch ($auth_type){
             case "stand_alone":
+                $resp = new NetResponse;
+                
                 $login = $_GET["login"];
                 $pass = $_GET["pass"];
                 //проверка
@@ -23,7 +24,7 @@ switch ($method){
                     $user_pass = $user["password"];
                     //valid auth
                     if($user_pass != $pass){
-                        $resp->AddParam("method", $method);
+                        $resp->AddMethod($method);
                         $resp->AddError("invalidpass");
                         $resp->SendResponse();
                         exit;
@@ -43,29 +44,11 @@ switch ($method){
                     $resp->AddParam("skipped", 0);
                 }
                 
-                $resp->AddParam("method", $method);
+                $resp->AddMethod($method);
                 $resp->AddParam("id",$user_id);
-                $cur_task = DB::GetFetchArray("SELECT id_task FROM current_tasks WHERE id_user = $user_id");
-                if($cur_task){
-                    $task_id = $cur_task["id_task"];
-                    $task = DB::GetFetchArray("SELECT text, ranking FROM tasks WHERE id=$task_id");
-                    $task_text = $task["text"];
-                    $task_ranking = $task["ranking"];
-                    $resp->AddParam("task", $task_text);
-                    $resp->AddParam("rank", $task_ranking);
-                }
-                else{
-                    $row_count = mysql_result(DB::SendQuery("SELECT COUNT(id) FROM tasks WHERE (`enable`=1 AND `id` NOT IN(SELECT id_task FROM completed_tasks WHERE id_user='$user_id')) ORDER BY `level` DESC"), 0);
-                    
-                    $task = DB::GetFetchArray("SELECT id, text, ranking FROM tasks WHERE `enable`=1 AND `id` NOT IN(SELECT id_task FROM completed_tasks WHERE id_user='$user_id') ORDER BY `level` DESC LIMIT ".rand(0, $row_count-1).", 1");
-                    $task_id = $task["id"];
-                    $query = DB::SendQuery("INSERT INTO current_tasks (id_user, id_task) VALUE ($user_id, $task_id)");
-                    $task_text = $task["text"];
-                    $task_ranking = $task["ranking"];
-                    $resp->AddParam("task", $task_text);
-                    $resp->AddParam("rank", $task_ranking);
-                }
+                $newtask = GetTask($user_id);
                 $resp->SendResponse();
+                $newtask->AddSendResponse();
                 DB::SendQuery("UPDATE users SET last_login_date=NOW() WHERE id = '$user_id'");
                 break;
             case "vk":
@@ -80,10 +63,59 @@ switch ($method){
                     break;
         }
     break;
-  case "update" :
-    break;
+    case "sendtask" :
+        $resp = new NetResponse;
+        $user_id = $_GET["userdbid"];
+        $completed = $_GET["completed"];
+        $cur_task = DB::GetFetchArray("SELECT id, id_task,start_date FROM current_tasks WHERE id_user=$user_id");
+        //если есть текущее задание
+        if($cur_task){
+            $task_id = $cur_task["id_task"];
+            $curtask_id= $cur_task["id"];
+            $query = DB::SendQuery("DELETE FROM current_tasks WHERE `id`=$curtask_id");
+            if($completed == "1"){
+                $task_dur = time() - strtotime($cur_task["start_date"]);
+                $query = DB::SendQuery("INSERT INTO completed_tasks(id_user,id_task,duration) VALUE ($user_id,$task_id,$task_dur)");
+                $query = DB::SendQuery("UPDATE tasks SET completed=completed+1 WHERE id=$task_id");
+                $query = DB::SendQuery("UPDATE users SET completed_tasks=completed_tasks+1 WHERE id=$user_id");
+                //есть ли комент и оценка?
+                if(isset($_GET["rank"])){
+                    $task_rank = $_GET["rank"];
+                    if($task_rank && $task !=0){
+                        $query = DB::SendQuery("INSERT INTO task_marks(id_user,id_task,mark) VALUE ($user_id,$task_id,$task_rank)");
+                    }
+                }
+                if(isset($_GET["comment"])){
+                    $task_comment = $_GET["comment"];
+                    if($task_comment && strlen($task_comment) > 0){
+                        $task_comment = urldecode($task_comment);
+                        $query = DB::SendQuery("INSERT INTO comments(id_task,id_user,text) VALUE ($task_id,$user_id,'$task_comment')");
+                    }
+                }
+            }else{
+                $query = DB::SendQuery("INSERT INTO skipped_tasks(id_user,id_task) VALUE ($user_id,$task_id)");
+                $query = DB::SendQuery("UPDATE tasks SET skipped=skipped+1 WHERE id=$task_id");
+                $query = DB::SendQuery("UPDATE users SET skipped_tasks=skipped_tasks+1 WHERE id=$user_id");
+            }
+            //SEND NEW TASK
+            $newtask = GetTask($user_id);
+            $resp->AddMethod($method);
+            $resp->SendResponse();
+            $newtask->AddSendResponse();
+        }else{
+            //hack
+        }
+        break;
+    case "gettask":
+        $resp = new NetResponse;
+        $user_id = $_GET["userdbid"];
+        $newtask = GetTask($user_id);
+        $resp->AddMethod($method);
+        $resp->SendResponse();
+        $newtask->AddSendResponse();
+        break;
   default:
-    echo "method=auth&result=nomethod";
+    echo "method=".$method."&error=nomethod";
     break;
 }
 ?>
